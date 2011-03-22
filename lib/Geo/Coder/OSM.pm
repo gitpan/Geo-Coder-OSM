@@ -3,14 +3,19 @@ package Geo::Coder::OSM;
 use strict;
 use warnings;
 
-use Carp qw(carp croak);
+use Carp qw(croak);
 use Encode ();
 use JSON;
 use LWP::UserAgent;
 use URI;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 $VERSION = eval $VERSION;
+
+my %sources = (
+    osm      => 'http://nominatim.openstreetmap.org/search',
+    mapquest => 'http://open.mapquestapi.com/nominatim/v1/search',
+);
 
 sub new {
     my ($class, @params) = @_;
@@ -18,22 +23,32 @@ sub new {
 
     my $self = bless \ %params, $class;
 
-    if ($params{ua}) {
-        $self->ua($params{ua});
+    $self->ua(
+        $params{ua} || LWP::UserAgent->new(agent => "$class/$VERSION")
+    );
+
+    if (exists $self->{sources}) {
+        my $sources = $self->{sources};
+        $self->{sources} = $sources = [$sources] unless ref $sources;
+        for my $source (@$sources) {
+            croak qq(unknown source '$source')
+                unless exists $sources{$source};
+        }
     }
     else {
-        $self->{ua} = LWP::UserAgent->new(agent => "$class/$VERSION");
+        $self->{sources} = ['osm'];
     }
+
+    $self->{source_idx} = 0;
 
     if ($self->{debug}) {
         my $dump_sub = sub { $_[0]->dump(maxlength => 0); return };
         $self->ua->set_my_handler(request_send  => $dump_sub);
         $self->ua->set_my_handler(response_done => $dump_sub);
     }
-
-    $self->{compress} = 1 unless exists $self->{compress};
-    $self->ua->default_header(accept_encoding => 'gzip,deflate')
-        if $self->{compress};
+    elsif (exists $self->{compress} ? $self->{compress} : 1) {
+        $self->ua->default_header(accept_encoding => 'gzip,deflate');
+    }
 
     return $self;
 }
@@ -57,7 +72,8 @@ sub geocode {
     my $location = $params{location} or return;
     $location = Encode::encode('utf-8', $location);
 
-    my $uri = URI->new('http://nominatim.openstreetmap.org/search');
+    my $idx = ($self->{source_idx} %= @{$self->{sources}})++;
+    my $uri = URI->new($sources{ $self->{sources}[$idx] });
     $uri->query_form(
         q                 => $location,
         format            => 'json',
@@ -111,11 +127,21 @@ Nominatim geocoding service.
 =head2 new
 
     $geocoder = Geo::Coder::OSM->new();
+    $geocoder = Geo::Coder::OSM->new(
+        ua      => $ua,
+        sources => [ 'osm', 'mapquest' ],
+        debug   => 1,
+    );
 
 Creates a new geocoding object.
 
 Accepts an optional B<ua> parameter for passing in a custom LWP::UserAgent
 object.
+
+Accepts an optional B<sources> parameter for specifying the data sources.
+Current valid values are B<osm> and B<mapquest>. The default value is
+B<osm>. To cycle between different sources, specify an array reference
+for the B<sources> value.
 
 =head2 geocode
 
@@ -123,7 +149,7 @@ object.
     @locations = $geocoder->geocode(location => $location)
 
 In scalar context, this method returns the first location result; and in
-list context it returns all locations results.
+list context it returns all location results.
 
 Each location result is a hashref; a typical example looks like:
 
@@ -174,8 +200,7 @@ Accessor for the UserAgent object.
 
 L<http://wiki.openstreetmap.org/wiki/Nominatim>
 
-L<Geo::Coder::Bing>, L<Geo::Coder::Google>, L<Geo::Coder::Mapquest>,
-L<Geo::Coder::Multimap>, L<Geo::Coder::Yahoo>
+L<http://open.mapquestapi.com/nominatim/>
 
 =head1 REQUESTS AND BUGS
 
@@ -212,13 +237,13 @@ L<http://rt.cpan.org/Public/Dist/Display.html?Name=Geo-Coder-OSM>
 
 =item * Search CPAN
 
-L<http://search.cpan.org/dist/Geo-Coder-OSM>
+L<http://search.cpan.org/dist/Geo-Coder-OSM/>
 
 =back
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2010 gray <gray at cpan.org>, all rights reserved.
+Copyright (C) 2010-2011 gray <gray at cpan.org>, all rights reserved.
 
 This library is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
