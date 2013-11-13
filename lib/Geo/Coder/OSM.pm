@@ -9,12 +9,12 @@ use JSON;
 use LWP::UserAgent;
 use URI;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 $VERSION = eval $VERSION;
 
-my %sources = (
-    osm      => 'http://nominatim.openstreetmap.org/search',
-    mapquest => 'http://open.mapquestapi.com/nominatim/v1/search',
+our %SOURCES = (
+    osm      => 'http://nominatim.openstreetmap.org',
+    mapquest => 'http://open.mapquestapi.com/nominatim/v1',
 );
 
 sub new {
@@ -32,7 +32,7 @@ sub new {
         $self->{sources} = $sources = [$sources] unless ref $sources;
         for my $source (@$sources) {
             croak qq(unknown source '$source')
-                unless exists $sources{$source};
+                unless exists $SOURCES{$source};
         }
     }
     else {
@@ -69,17 +69,59 @@ sub geocode {
     my ($self, @params) = @_;
     my %params = (@params % 2) ? (location => @params) : @params;
 
-    my $location = $params{location} or return;
+    my $location = delete $params{location} or return;
     $location = Encode::encode('utf-8', $location);
 
-    my $idx = ($self->{source_idx} %= @{$self->{sources}})++;
-    my $uri = URI->new($sources{ $self->{sources}[$idx] });
+    # Cycle throught the list of sources.
+    my $idx = ($self->{source_idx} %= @{ $self->{sources} })++;
+
+    my $uri = URI->new($SOURCES{ $self->{sources}[$idx] } . '/search');
     $uri->query_form(
         q                 => $location,
         format            => 'json',
         addressdetails    => 1,
         'accept-language' => 'en',
+        %params,
     );
+
+    return $self->_request($uri);
+}
+
+sub reverse_geocode {
+    my ($self, @params) = @_;
+    my %params = (@params % 2) ? (latlng => @params) : @params;
+
+    # Maintain api compatibility with other geocoders.
+    my ($lat, $lon);
+    if (my $latlon = delete $params{latlng}) {
+        ($lat, $lon) = split '\s*,\s*', $latlon;
+    }
+    else {
+        $lat = delete $params{lat};
+        ($lon) = grep defined, delete @params{qw(lon lng)};
+    }
+    return unless 2 == grep defined, $lat, $lon;
+
+    # Cycle throught the list of sources.
+    my $idx = ($self->{source_idx} %= @{ $self->{sources} })++;
+
+    my $uri = URI->new($SOURCES{ $self->{sources}[$idx] } . '/reverse');
+    $uri->query_form(
+        lat               => $lat,
+        lon               => $lon,
+        format            => 'json',
+        addressdetails    => 1,
+        'accept-language' => 'en',
+        %params,
+    );
+
+    return $self->_request($uri);
+}
+
+sub _request {
+    my ($self, $uri) = @_;
+
+    return unless $uri;
 
     my $res = $self->{response} = $self->ua->get($uri);
     return unless $res->is_success;
@@ -95,7 +137,7 @@ sub geocode {
     my $data = eval { from_json($content) };
     return unless $data;
 
-    my @results = @{$data || []};
+    my @results = 'ARRAY' eq ref $data ? @$data : ($data);
     return wantarray ? @results : $results[0];
 }
 
@@ -126,12 +168,12 @@ Nominatim geocoding service.
 
 =head2 new
 
-    $geocoder = Geo::Coder::OSM->new();
+    $geocoder = Geo::Coder::OSM->new()
     $geocoder = Geo::Coder::OSM->new(
         ua      => $ua,
         sources => [ 'osm', 'mapquest' ],
         debug   => 1,
-    );
+    )
 
 Creates a new geocoding object.
 
@@ -139,9 +181,9 @@ Accepts an optional B<ua> parameter for passing in a custom LWP::UserAgent
 object.
 
 Accepts an optional B<sources> parameter for specifying the data sources.
-Current valid values are B<osm> and B<mapquest>. The default value is
-B<osm>. To cycle between different sources, specify an array reference
-for the B<sources> value.
+Current valid values are B<osm> and B<mapquest>. The default value is B<osm>.
+To cycle between different sources, specify an array reference for the
+B<sources> value. To define additional sources, see L</SOURCES> below.
 
 =head2 geocode
 
@@ -182,6 +224,13 @@ Each location result is a hashref; a typical example looks like:
         type     => "station",
     }
 
+=head2 reverse_geocode
+
+    $location = $geocoder->reverse_geocode(lat => $lat, lon => $lon)
+    $location = $geocoder->reverse_geocode(latlng => "$lat,$lon")
+
+Returns a location result for the given lat/lon pair.
+
 =head2 response
 
     $response = $geocoder->response()
@@ -195,6 +244,14 @@ used to determine the details of an error.
     $ua = $geocoder->ua($ua)
 
 Accessor for the UserAgent object.
+
+=head2 SOURCES
+
+To define additional sources add them to the B<%SOURCES> package variable like
+so:
+
+    $Geo::Coder::OSM::SOURCES{local} = 'http://127.0.0.1/api_base_path';
+    $Geo::Coder::OSM::SOURCES{internal} = 'http://internal.corp/api_base_path';
 
 =head1 SEE ALSO
 
@@ -243,7 +300,7 @@ L<http://search.cpan.org/dist/Geo-Coder-OSM/>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2010-2011 gray <gray at cpan.org>, all rights reserved.
+Copyright (C) 2010-2013 gray <gray at cpan.org>, all rights reserved.
 
 This library is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

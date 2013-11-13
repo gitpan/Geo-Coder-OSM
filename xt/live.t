@@ -16,23 +16,32 @@ for my $source (qw(osm mapquest)) {
     );
     {
         my $address = '132 Maney Hill Road, West Midlands, UK';
-        my $location = $geocoder->geocode($address);
+        my $forward = $geocoder->geocode($address);
         is(
-            $location->{address}{town},
+            $forward->{address}{town},
             'Sutton Coldfield',
             "correct town for $address"
         );
+        my $road = $forward->{address}{road};
+
+        my ($lat, $lon) = @$forward{qw(lat lon)};
+        my $reverse = $geocoder->reverse_geocode(lat => $lat, lon => $lon);
+        is(
+            $reverse->{address}{road},
+            $forward->{address}{road},
+            'correct street for lat/lon',
+        );
     }
     {
-        my $address = qq(Albrecht-Th\xE4r-Stra\xDFe 6, 48147 M\xFCnster, Germany);
+        my $address = qq(Champs-\xC9lys\xE9es, 75008);
 
         my $location = $geocoder->geocode($address);
         ok($location, 'latin1 bytes');
-        is($location->{address}{country}, 'Germany', 'latin1 bytes');
+        is($location->{address}{country}, 'France', 'latin1 bytes');
 
         $location = $geocoder->geocode(decode('latin1', $address));
         ok($location, 'UTF-8 characters');
-        is($location->{address}{country}, 'Germany', 'UTF-8 characters');
+        is($location->{address}{country}, 'France', 'UTF-8 characters');
 
         TODO: {
             local $TODO = 'UTF-8 bytes';
@@ -40,7 +49,7 @@ for my $source (qw(osm mapquest)) {
                 encode('utf-8', decode('latin1', $address))
             );
             ok($location, 'UTF-8 bytes');
-            is($location->{address}{country}, 'Germany', 'UTF-8 bytes');
+            is($location->{address}{country}, 'France', 'UTF-8 bytes');
         }
     }
     {
